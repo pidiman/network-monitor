@@ -5,7 +5,9 @@
 # Runs the official Ookla Speedtest CLI and reports the result to the
 # notes.pidiman.sk Network Monitor API.
 #
-#   1. read config (safe parser, the file is never sourced/executed)
+#   1. read config: NETWORK_MONITOR_API_KEY + NETWORK_MONITOR_API_BASE_URL
+#      environment variables (Docker), otherwise the config file
+#      (safe parser, the file is never sourced/executed)
 #   2. GET  <base>/config       -> device info, enabled flag
 #   3. run  speedtest --format=json
 #   4. POST <base>/speedtests   -> store result
@@ -20,7 +22,7 @@
 #
 set -euo pipefail
 
-readonly AGENT_VERSION="0.1.0"
+readonly AGENT_VERSION="0.2.0"
 readonly DEFAULT_CONFIG_FILE="/etc/notes-network-monitor/agent.env"
 CONFIG_FILE="${NETWORK_MONITOR_CONFIG:-$DEFAULT_CONFIG_FILE}"
 
@@ -38,6 +40,7 @@ readonly SPEEDTEST_TIMEOUT=300
 
 API_KEY=""
 API_BASE_URL=""
+CONFIG_SOURCE=""
 TMP_DIR=""
 
 # ----------------------------------------------------------------------------
@@ -67,8 +70,11 @@ Options:
   --help      Show this help.
   --version   Show agent version.
 
-Config file: ${DEFAULT_CONFIG_FILE}
-  (override with the NETWORK_MONITOR_CONFIG environment variable)
+Configuration (first match wins):
+  1. environment variables NETWORK_MONITOR_API_KEY and
+     NETWORK_MONITOR_API_BASE_URL (both must be set; used by Docker)
+  2. config file ${DEFAULT_CONFIG_FILE}
+     (override the path with the NETWORK_MONITOR_CONFIG environment variable)
 EOF
 }
 
@@ -88,10 +94,28 @@ unquote() {
     printf '%s' "$v"
 }
 
+# Environment variables (Docker) take precedence over the config file
+# (Raspberry Pi / Debian installer). Both variables must be set.
+load_config() {
+    if [[ -n "${NETWORK_MONITOR_API_KEY:-}" && -n "${NETWORK_MONITOR_API_BASE_URL:-}" ]]; then
+        API_KEY="$NETWORK_MONITOR_API_KEY"
+        API_BASE_URL="$NETWORK_MONITOR_API_BASE_URL"
+        CONFIG_SOURCE="environment"
+        # Do not pass the key on to child processes (curl, speedtest).
+        unset NETWORK_MONITOR_API_KEY
+    elif [[ ! -e "$CONFIG_FILE" && -n "${NETWORK_MONITOR_API_KEY:-}${NETWORK_MONITOR_API_BASE_URL:-}" ]]; then
+        die "$EXIT_CONFIG" "both NETWORK_MONITOR_API_KEY and NETWORK_MONITOR_API_BASE_URL environment variables must be set"
+    else
+        load_config_file
+        CONFIG_SOURCE="$CONFIG_FILE"
+    fi
+    validate_config
+}
+
 # Parse only the known KEY=VALUE lines. The file is never sourced, so
 # nothing in it is ever executed ($(...), backticks, ; etc. stay literal).
-load_config() {
-    [[ -e "$CONFIG_FILE" ]] || die "$EXIT_CONFIG" "config file not found: $CONFIG_FILE (run install.sh)"
+load_config_file() {
+    [[ -e "$CONFIG_FILE" ]] || die "$EXIT_CONFIG" "no configuration: set the NETWORK_MONITOR_API_KEY and NETWORK_MONITOR_API_BASE_URL environment variables, or create $CONFIG_FILE (run install.sh)"
     [[ -r "$CONFIG_FILE" ]] || die "$EXIT_CONFIG" "config file not readable by user '$(id -un)': $CONFIG_FILE"
 
     local mode
@@ -120,11 +144,13 @@ load_config() {
             warn "ignoring malformed config line"
         fi
     done < "$CONFIG_FILE"
+}
 
-    [[ -n "$API_KEY" ]] || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_KEY is empty in $CONFIG_FILE"
+validate_config() {
+    [[ -n "$API_KEY" ]] || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_KEY is empty in $CONFIG_SOURCE"
     [[ "$API_KEY" =~ ^[A-Za-z0-9_.-]+$ ]] \
         || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_KEY contains invalid characters"
-    [[ -n "$API_BASE_URL" ]] || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_BASE_URL is empty in $CONFIG_FILE"
+    [[ -n "$API_BASE_URL" ]] || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_BASE_URL is empty in $CONFIG_SOURCE"
     [[ "$API_BASE_URL" =~ ^https?://[^[:space:]\"\\]+$ ]] \
         || die "$EXIT_CONFIG" "NETWORK_MONITOR_API_BASE_URL is not a valid http(s) URL: $API_BASE_URL"
     API_BASE_URL="${API_BASE_URL%/}"

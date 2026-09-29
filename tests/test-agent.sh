@@ -63,27 +63,7 @@ case "$method $url" in
 esac
 MOCK
 
-cat >"$MOCKBIN/speedtest" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "${1:-}" == "--version" ]]; then
-    if [[ "${MOCK_SPEEDTEST_KIND:-ookla}" == "python" ]]; then
-        echo "speedtest-cli 2.1.3"; echo "Python 3.11.2"
-    else
-        echo "Speedtest by Ookla 1.2.0.84 (ea6b6773cf) Linux/aarch64-linux-musl"
-    fi
-    exit 0
-fi
-printf '%s\n' "$*" >"$MOCK_DIR/speedtest.args"
-if [[ -n "${MOCK_SPEEDTEST_FAIL:-}" ]]; then
-    echo '{"type":"log","timestamp":"2026-09-29T10:44:05Z","message":"Cannot open socket: Timeout occurred in connect.","level":"error"}' >&2
-    exit 2
-fi
-# license notice line (non JSON) followed by the result, like a first run
-echo "==== Ookla license accepted ===="
-cat <<'JSON'
-{"type":"result","timestamp":"2026-09-29T10:44:05Z","ping":{"jitter":0.209,"latency":2.846,"low":2.5,"high":3.1},"download":{"bandwidth":113493050,"bytes":1,"elapsed":1,"latency":{"iqm":2.505}},"upload":{"bandwidth":116399265,"bytes":1,"elapsed":1,"latency":{"iqm":7.313}},"isp":"Slovak Telekom","interface":{"internalIp":"192.168.1.27","name":"eth0","isVpn":false},"server":{"id":34925,"name":"ACS","location":"Bratislava","country":"Slovakia"},"result":{"id":"45ff5e54-7260-4bb3-acd2-93b3e7a80f49","url":"https://www.speedtest.net/result/c/45ff5e54-7260-4bb3-acd2-93b3e7a80f49"}}
-JSON
-MOCK
+cp "$ROOT/tests/fixtures/fake-speedtest" "$MOCKBIN/speedtest"
 chmod +x "$MOCKBIN/curl" "$MOCKBIN/speedtest"
 
 # -------------------------------------------------------------- helpers ----
@@ -236,7 +216,7 @@ echo "15. missing config"
 rm -f "$WORK/agent.env"
 run_agent --
 check "exit 2" status_is 2
-check "message" output_has "config file not found"
+check "message" output_has "no configuration"
 
 echo "16. world-readable config warns"
 default_config
@@ -249,6 +229,57 @@ printf 'NETWORK_MONITOR_API_KEY=%s\r\nNETWORK_MONITOR_API_BASE_URL=https://api.e
 chmod 600 "$WORK/agent.env"
 run_agent -- --check
 check "exit 0" status_is 0
+
+echo "18. config from environment variables (Docker)"
+rm -f "$WORK/agent.env"
+run_agent "NETWORK_MONITOR_API_KEY=$TEST_KEY" "NETWORK_MONITOR_API_BASE_URL=https://env.example.test/api/network" --
+check "exit 0 without config file" status_is 0
+check "stored" output_has "Result stored successfully."
+check "env URL used" grep -q 'https://env.example.test/api/network/speedtests' "$WORK/mock/curl.argv"
+check "key via curl stdin" grep -q "X-API-Key: $TEST_KEY" "$WORK/mock/curl.stdin"
+check "key not leaked" key_not_leaked
+
+echo "19. environment variables take precedence over config file"
+default_config
+run_agent "NETWORK_MONITOR_API_KEY=nm_ENVKEY_1234567890" "NETWORK_MONITOR_API_BASE_URL=https://env.example.test/api/network" -- --check
+check "exit 0" status_is 0
+check "env key used" grep -q "X-API-Key: nm_ENVKEY_1234567890" "$WORK/mock/curl.stdin"
+check "file key not used" bash -c "! grep -q '$TEST_KEY' '$WORK/mock/curl.stdin'"
+check "env URL used" grep -q 'https://env.example.test/api/network/config' "$WORK/mock/curl.argv"
+
+echo "20. only one env variable set, no config file"
+rm -f "$WORK/agent.env"
+run_agent "NETWORK_MONITOR_API_KEY=$TEST_KEY" -- --check
+check "exit 2" status_is 2
+check "message" output_has "both NETWORK_MONITOR_API_KEY and NETWORK_MONITOR_API_BASE_URL"
+check "key not leaked" key_not_leaked
+
+echo "21. only one env variable set, config file present -> file used"
+default_config
+run_agent "NETWORK_MONITOR_API_BASE_URL=https://env.example.test/api/network" -- --check
+check "exit 0" status_is 0
+check "file URL used" grep -q 'https://api.example.test/api/network/config' "$WORK/mock/curl.argv"
+
+echo "22. invalid key in environment rejected"
+rm -f "$WORK/agent.env"
+# shellcheck disable=SC2016  # literal $(id) is the point of this test
+run_agent 'NETWORK_MONITOR_API_KEY=abc$(id)' "NETWORK_MONITOR_API_BASE_URL=https://env.example.test/api/network" -- --check
+check "exit 2" status_is 2
+check "message" output_has "invalid characters"
+
+echo "23. key not exported to speedtest process"
+cat >"$MOCKBIN/speedtest-env-probe" <<'MOCK'
+#!/usr/bin/env bash
+env >"$MOCK_DIR/speedtest.env"
+exec "$(dirname "$0")/speedtest.real" "$@"
+MOCK
+mv "$MOCKBIN/speedtest" "$MOCKBIN/speedtest.real"
+mv "$MOCKBIN/speedtest-env-probe" "$MOCKBIN/speedtest"
+chmod +x "$MOCKBIN/speedtest"
+run_agent "NETWORK_MONITOR_API_KEY=$TEST_KEY" "NETWORK_MONITOR_API_BASE_URL=https://env.example.test/api/network" --
+check "exit 0" status_is 0
+check "key absent from speedtest env" bash -c "! grep -q '$TEST_KEY' '$WORK/mock/speedtest.env'"
+mv "$MOCKBIN/speedtest.real" "$MOCKBIN/speedtest"
 
 echo
 echo "Passed: $PASS  Failed: $FAIL"

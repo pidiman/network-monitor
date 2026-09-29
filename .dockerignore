@@ -1,0 +1,3 @@
+# Keep the build context minimal; never send secrets to the Docker daemon.
+*
+!src/network-speedtest.sh

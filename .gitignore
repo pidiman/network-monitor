@@ -2,8 +2,10 @@
 agent.env
 *.env
 !*.env.example
+.env
 .env*
 !.env.example
+docker/.env
 *.key
 *.pem
 secrets/

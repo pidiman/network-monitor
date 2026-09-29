@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fake Ookla Speedtest CLI for tests. Prints a canned result (no network).
+# MOCK_DIR (optional): records the arguments it was called with.
+# MOCK_SPEEDTEST_KIND=python: pretend to be the Python speedtest-cli.
+# MOCK_SPEEDTEST_FAIL=1: fail like Ookla does.
+if [[ "${1:-}" == "--version" ]]; then
+    if [[ "${MOCK_SPEEDTEST_KIND:-ookla}" == "python" ]]; then
+        echo "speedtest-cli 2.1.3"; echo "Python 3.11.2"
+    else
+        echo "Speedtest by Ookla 1.2.0.84 (ea6b6773cf) Linux/aarch64-linux-musl"
+    fi
+    exit 0
+fi
+[[ -n "${MOCK_DIR:-}" ]] && printf '%s\n' "$*" >"$MOCK_DIR/speedtest.args"
+if [[ -n "${MOCK_SPEEDTEST_FAIL:-}" ]]; then
+    echo '{"type":"log","timestamp":"2026-09-29T10:44:05Z","message":"Cannot open socket: Timeout occurred in connect.","level":"error"}' >&2
+    exit 2
+fi
+# license notice line (non JSON) followed by the result, like a first run
+echo "==== Ookla license accepted ===="
+cat <<'JSON'
+{"type":"result","timestamp":"2026-09-29T10:44:05Z","ping":{"jitter":0.209,"latency":2.846,"low":2.5,"high":3.1},"download":{"bandwidth":113493050,"bytes":1,"elapsed":1,"latency":{"iqm":2.505}},"upload":{"bandwidth":116399265,"bytes":1,"elapsed":1,"latency":{"iqm":7.313}},"isp":"Slovak Telekom","interface":{"internalIp":"192.168.1.27","name":"eth0","isVpn":false},"server":{"id":34925,"name":"ACS","location":"Bratislava","country":"Slovakia"},"result":{"id":"45ff5e54-7260-4bb3-acd2-93b3e7a80f49","url":"https://www.speedtest.net/result/c/45ff5e54-7260-4bb3-acd2-93b3e7a80f49"}}
+JSON
