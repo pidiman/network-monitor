@@ -1,0 +1,22 @@
+# Secrets — never commit real configuration or API keys
+agent.env
+*.env
+!*.env.example
+.env*
+!.env.example
+*.key
+*.pem
+secrets/
+credentials*
+
+# Local test / scratch output
+tests/tmp/
+*.log
+*.tmp
+
+# OS / editor noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
