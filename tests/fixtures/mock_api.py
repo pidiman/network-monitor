@@ -5,6 +5,7 @@ Keys:
   nm_docker_disabled_key_12345    -> enabled=false
   anything else                   -> 401
 Received payloads are written to $MOCK_DATA_DIR/received.json.
+Schedule returned for enabled devices: $MOCK_INTERVAL (60) / $MOCK_OFFSET (10).
 """
 import http.server
 import json
@@ -15,6 +16,8 @@ DEVICES = {
     "nm_docker_disabled_key_12345": {"device_key": "docker-disabled", "enabled": False},
 }
 DATA_DIR = os.environ.get("MOCK_DATA_DIR", "/tmp")
+INTERVAL = int(os.environ.get("MOCK_INTERVAL", "60"))
+OFFSET = int(os.environ.get("MOCK_OFFSET", "10"))
 seen = set()
 
 
@@ -38,7 +41,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         device = self._device()
         if device:
-            self._send(200, {**device, "interval_minutes": 60, "offset_minutes": 10})
+            self._send(200, {**device, "interval_minutes": INTERVAL, "offset_minutes": OFFSET})
 
     def do_POST(self):
         if self.path != "/api/network/speedtests":

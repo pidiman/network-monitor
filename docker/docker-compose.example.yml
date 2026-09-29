@@ -1,8 +1,17 @@
 # Network Monitor Agent — Docker Compose / Synology Container Manager example
 #
-# One-shot job: the container runs ONE measurement
-# (GET config -> Ookla speedtest -> POST result) and exits.
-# Start it again to run another measurement. Scheduling comes later.
+# Scheduled one-shot job: every start of this container runs
+# `network-speedtest --scheduled` ONCE and exits:
+#   GET config -> inside the device's slot and not measured yet?
+#     yes -> Ookla speedtest -> POST result -> exit
+#     no  -> exit 0 (a few milliseconds, one log line)
+# Something outside starts it every 5 minutes, e.g. Synology Task Scheduler:
+#   docker start network-monitor
+# (see README → Scheduling → Synology). No process runs between starts.
+#
+# Manual speedtest right now (ignores the schedule), e.g. over SSH:
+#   docker run --rm --network host -e NETWORK_MONITOR_API_KEY -e NETWORK_MONITOR_API_BASE_URL \
+#     ghcr.io/pidiman/network-monitor:latest
 #
 # Provide the values via a .env file next to this compose file
 # (see docker/.env.example — never commit the real .env), or replace the
@@ -14,6 +23,10 @@ services:
     image: ghcr.io/pidiman/network-monitor:latest
     container_name: network-monitor
 
+    # Decide by the schedule from notes.pidiman.sk (interval/offset/enabled).
+    # Remove this line to get a manual one-shot speedtest on every start.
+    command: ["--scheduled"]
+
     # Measure the host's own internet connectivity as directly as possible.
     # No ports are published; the container only makes outbound requests.
     network_mode: host
@@ -24,4 +37,11 @@ services:
       #   http://192.168.1.27:3077/api/network
       NETWORK_MONITOR_API_BASE_URL: "${NETWORK_MONITOR_API_BASE_URL:-https://notes.pidiman.sk/api/network}"
 
+    # Last measured slot survives image updates / container re-creation.
+    volumes:
+      - state:/var/lib/notes-network-monitor
+
     restart: "no"
+
+volumes:
+  state:

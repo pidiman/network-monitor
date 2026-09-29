@@ -49,7 +49,11 @@ COPY --chmod=0755 src/network-speedtest.sh /usr/local/bin/network-speedtest
 # its license/GDPR acceptance in ~/.config/ookla.
 RUN groupadd --system --gid 10001 monitor \
     && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/monitor \
-        --shell /usr/sbin/nologin monitor
+        --shell /usr/sbin/nologin monitor \
+    && install -d -m 0700 -o 10001 -g 10001 /var/lib/notes-network-monitor
+
+# State for --scheduled (last measured slot + lock; never the API key).
+# Mount a volume here so it survives container re-creation (see compose).
 
 USER 10001:10001
 WORKDIR /home/monitor
@@ -65,5 +69,8 @@ LABEL org.opencontainers.image.title="network-monitor" \
 
 # tini as PID 1: forwards signals (docker stop) and reaps children.
 # One run, then exit with the agent's exit code.
+#   (no args)     manual one-shot speedtest
+#   --scheduled   speedtest only in the device's slot (started every 5 min by
+#                 e.g. Synology Task Scheduler: docker start network-monitor)
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/network-speedtest"]
 CMD []

@@ -25,8 +25,13 @@ URL="http://$MOCK:3077/api/network"
 PASS=0
 FAIL=0
 
+VOL="nm-test-state-$SUFFIX"
+SCHED="nm-test-sched-$SUFFIX"
+T1310=1790773800   # 2026-09-30 13:10:00 UTC (mock device: interval 60, offset 10)
+
 cleanup() {
-    docker rm -f "$MOCK" >/dev/null 2>&1 || true
+    docker rm -f "$MOCK" "$SCHED" >/dev/null 2>&1 || true
+    docker volume rm "$VOL" >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
     rm -rf "$WORK"
 }
@@ -126,6 +131,75 @@ printf 'NETWORK_MONITOR_API_KEY=%s\nNETWORK_MONITOR_API_BASE_URL=%s\n' "$KEY" "$
 run_agent --env-file "$WORK/test.env" -- --check
 check "exit 0" status_is 0
 check "key not in log" no_key
+
+echo "10. --scheduled in slot, with a state volume"
+AUTH=(-e "NETWORK_MONITOR_API_KEY=$KEY" -e "NETWORK_MONITOR_API_BASE_URL=$URL")
+rm -f "$WORK/received.json"
+run_agent "${AUTH[@]}" -v "$VOL:/var/lib/notes-network-monitor" -e "NETWORK_MONITOR_TEST_NOW=$((T1310 + 60))" -- --scheduled
+check "exit 0" status_is 0
+check "slot run" output_has "Slot:   2026-09-30 13:10 UTC"
+check "posted" test -s "$WORK/received.json"
+check "key not in log" no_key
+
+echo "11. --scheduled same slot again (new container, same volume) -> nothing"
+rm -f "$WORK/received.json"
+run_agent "${AUTH[@]}" -v "$VOL:/var/lib/notes-network-monitor" -e "NETWORK_MONITOR_TEST_NOW=$((T1310 + 300))" -- --scheduled
+check "exit 0" status_is 0
+check "already measured" output_has "already measured"
+check "nothing posted" test ! -e "$WORK/received.json"
+
+echo "12. --scheduled outside the slot -> nothing"
+run_agent "${AUTH[@]}" -e "NETWORK_MONITOR_TEST_NOW=$((T1310 + 1800))" -- --scheduled
+check "exit 0" status_is 0
+check "not in a slot" output_has "not in a slot; next: 2026-09-30 14:10 UTC"
+check "nothing posted" test ! -e "$WORK/received.json"
+
+echo "13. --scheduled with disabled device -> nothing"
+run_agent -e "NETWORK_MONITOR_API_KEY=$DISABLED_KEY" -e "NETWORK_MONITOR_API_BASE_URL=$URL" \
+    -e "NETWORK_MONITOR_TEST_NOW=$T1310" -- --scheduled
+check "exit 0" status_is 0
+check "disabled" output_has "disabled on the server"
+
+echo "14. Synology style: 'docker start' of one existing container"
+docker volume rm "$VOL" >/dev/null 2>&1 || true
+docker create --name "$SCHED" --network "$NET" "${AUTH[@]}" \
+    -e "NETWORK_MONITOR_TEST_NOW=$T1310" -e MOCK_SPEEDTEST_SLEEP=4 \
+    -v "$ROOT/tests/fixtures/fake-speedtest:/usr/bin/speedtest:ro" \
+    -v "$VOL:/var/lib/notes-network-monitor" "$IMAGE" --scheduled >/dev/null
+docker start "$SCHED" >/dev/null
+sleep 1
+docker start "$SCHED" >/dev/null   # already running -> docker does nothing
+STATUS=$(docker wait "$SCHED")
+OUTPUT="$(docker logs "$SCHED" 2>&1)"
+check "first start measured, exit 0" status_is 0
+check "exactly one speedtest while running" [ "$(grep -c 'Running speedtest' <<<"$OUTPUT")" -eq 1 ]
+docker start "$SCHED" >/dev/null
+STATUS=$(docker wait "$SCHED")
+OUTPUT="$(docker logs "$SCHED" 2>&1)"
+check "next start (same slot) exit 0" status_is 0
+check "next start: already measured" output_has "already measured"
+check "still one speedtest in total" [ "$(grep -c 'Running speedtest' <<<"$OUTPUT")" -eq 1 ]
+docker rm -f "$SCHED" >/dev/null
+
+echo "15. two containers on the same state volume in parallel (flock)"
+docker volume rm "$VOL" >/dev/null 2>&1 || true
+docker run -d --name "$SCHED" --network "$NET" "${AUTH[@]}" \
+    -e "NETWORK_MONITOR_TEST_NOW=$T1310" -e MOCK_SPEEDTEST_SLEEP=5 \
+    -v "$ROOT/tests/fixtures/fake-speedtest:/usr/bin/speedtest:ro" \
+    -v "$VOL:/var/lib/notes-network-monitor" "$IMAGE" --scheduled >/dev/null
+sleep 2
+run_agent "${AUTH[@]}" -v "$VOL:/var/lib/notes-network-monitor" -e "NETWORK_MONITOR_TEST_NOW=$T1310" -- --scheduled
+check "2nd scheduled -> exit 0, skipped" output_has "in progress"
+run_agent "${AUTH[@]}" -v "$VOL:/var/lib/notes-network-monitor" --
+check "manual while scheduled runs -> exit 7" status_is 7
+STATUS=$(docker wait "$SCHED")
+check "1st finished OK" status_is 0
+docker rm -f "$SCHED" >/dev/null
+
+echo "16. manual run without volume still a plain one-shot"
+run_agent "${AUTH[@]}" --
+check "exit 0" status_is 0
+check "measured + sent" output_has "Sending result to API..."
 
 echo
 echo "Passed: $PASS  Failed: $FAIL"

@@ -2,7 +2,8 @@
 #
 # Network Monitor Agent — uninstaller
 #
-# Removes the agent script. Optionally removes the configuration (API key).
+# Removes the systemd timer/service, the state directory and the agent script.
+# Optionally removes the configuration (API key).
 # Does NOT remove the Ookla Speedtest CLI, curl or jq — other software may
 # depend on them.
 #
@@ -10,6 +11,10 @@ set -euo pipefail
 
 readonly CONFIG_DIR="/etc/notes-network-monitor"
 readonly AGENT_TARGET="/usr/local/bin/network-speedtest"
+readonly STATE_DIR="/var/lib/notes-network-monitor"
+readonly SYSTEMD_UNIT_DIR="/etc/systemd/system"
+readonly SERVICE_NAME="network-monitor.service"
+readonly TIMER_NAME="network-monitor.timer"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -28,7 +33,8 @@ confirm_no_default() {
 case "${1:-}" in
     -h|--help)
         say "Usage: sudo ./uninstall.sh"
-        say "Removes $AGENT_TARGET and optionally $CONFIG_DIR."
+        say "Removes the systemd timer/service, $STATE_DIR, $AGENT_TARGET"
+        say "and optionally $CONFIG_DIR."
         exit 0
         ;;
     "") ;;
@@ -43,6 +49,30 @@ fi
 
 say "Network Monitor Agent Uninstaller"
 say ""
+
+# 1. scheduling
+if [[ -f "$SYSTEMD_UNIT_DIR/$TIMER_NAME" || -f "$SYSTEMD_UNIT_DIR/$SERVICE_NAME" ]]; then
+    if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now "$TIMER_NAME" >/dev/null 2>&1 || true
+        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$SYSTEMD_UNIT_DIR/$TIMER_NAME" "$SYSTEMD_UNIT_DIR/$SERVICE_NAME"
+    if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload || true
+        systemctl reset-failed "$SERVICE_NAME" "$TIMER_NAME" >/dev/null 2>&1 || true
+    fi
+    ok "Removed systemd timer and service ($TIMER_NAME, $SERVICE_NAME)"
+else
+    say "systemd timer not installed."
+fi
+
+# 2. state (last slot + lock; no secrets)
+if [[ -d "$STATE_DIR" ]]; then
+    rm -rf -- "$STATE_DIR"
+    ok "Removed state directory $STATE_DIR"
+fi
+
+# 3. agent
 
 if [[ -e "$AGENT_TARGET" ]]; then
     rm -f -- "$AGENT_TARGET"

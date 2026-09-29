@@ -1,0 +1,39 @@
+# Network Monitor — scheduled speedtest check (template, installed by install.sh)
+#
+# Started every 5 minutes by network-monitor.timer. The agent itself decides,
+# from interval_minutes / offset_minutes on notes.pidiman.sk, whether the
+# current time is inside the device's slot; otherwise it exits immediately.
+#
+# @AGENT_USER@ / @AGENT_GROUP@ are replaced by install.sh.
+
+[Unit]
+Description=Network Monitor scheduled speedtest check
+Documentation=https://github.com/pidiman/network-monitor
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=@AGENT_USER@
+Group=@AGENT_GROUP@
+ExecStart=/usr/local/bin/network-speedtest --scheduled
+
+# /var/lib/notes-network-monitor: last measured slot + lock (no secrets).
+StateDirectory=notes-network-monitor
+StateDirectoryMode=0700
+# The Ookla CLI stores its license/GDPR acceptance under $HOME/.config.
+Environment=HOME=/var/lib/notes-network-monitor
+
+# speedtest timeout is 300 s; leave room for the API calls.
+TimeoutStartSec=15min
+
+# Hardening: the agent only reads its config and writes the state directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

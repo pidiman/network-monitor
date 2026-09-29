@@ -1,13 +1,24 @@
-# systemd (planned)
+# systemd scheduling (Linux / Raspberry Pi)
 
-Scheduling is **not implemented yet**. The agent is currently run manually:
+| File                      | Installed to                                   |
+|---------------------------|------------------------------------------------|
+| `network-monitor.service` | `/etc/systemd/system/network-monitor.service` (`@AGENT_USER@`/`@AGENT_GROUP@` filled in by `install.sh`) |
+| `network-monitor.timer`   | `/etc/systemd/system/network-monitor.timer`    |
+
+- The **timer** wakes the service every 5 minutes (`OnCalendar=*:0/5`,
+  `Persistent=true`).
+- The **service** (`Type=oneshot`, runs as the agent user) executes
+  `network-speedtest --scheduled` and exits. The agent measures only inside
+  the device's slot (interval/offset from notes.pidiman.sk) and at most once
+  per slot; otherwise it logs one line and exits in milliseconds.
+- State: `/var/lib/notes-network-monitor` (`StateDirectory=`), holds only the
+  last measured slot and a lock file.
+
+Installed, updated and removed by `install.sh` / `uninstall.sh` — do not copy
+the files manually. See the main [README](../README.md#scheduling).
 
 ```bash
-network-speedtest
+systemctl status network-monitor.timer
+systemctl list-timers | grep network-monitor
+journalctl -u network-monitor.service
 ```
-
-A future step will add a systemd service + timer that uses
-`interval_minutes` / `offset_minutes` from `GET /api/network/config`.
-The agent already runs non-interactively (Ookla license is accepted via
-`--accept-license --accept-gdpr`, all network calls have timeouts), so it is
-ready to be wrapped by a timer.

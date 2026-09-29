@@ -3,6 +3,7 @@
 # MOCK_DIR (optional): records the arguments it was called with.
 # MOCK_SPEEDTEST_KIND=python: pretend to be the Python speedtest-cli.
 # MOCK_SPEEDTEST_FAIL=1: fail like Ookla does.
+# MOCK_SPEEDTEST_SLEEP=N: take N seconds (concurrency tests).
 if [[ "${1:-}" == "--version" ]]; then
     if [[ "${MOCK_SPEEDTEST_KIND:-ookla}" == "python" ]]; then
         echo "speedtest-cli 2.1.3"; echo "Python 3.11.2"
@@ -11,7 +12,8 @@ if [[ "${1:-}" == "--version" ]]; then
     fi
     exit 0
 fi
-[[ -n "${MOCK_DIR:-}" ]] && printf '%s\n' "$*" >"$MOCK_DIR/speedtest.args"
+[[ -n "${MOCK_DIR:-}" ]] && printf '%s\n' "$*" >>"$MOCK_DIR/speedtest.args"
+[[ -n "${MOCK_SPEEDTEST_SLEEP:-}" ]] && sleep "$MOCK_SPEEDTEST_SLEEP"
 if [[ -n "${MOCK_SPEEDTEST_FAIL:-}" ]]; then
     echo '{"type":"log","timestamp":"2026-09-29T10:44:05Z","message":"Cannot open socket: Timeout occurred in connect.","level":"error"}' >&2
     exit 2

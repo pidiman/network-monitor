@@ -38,15 +38,27 @@ jobs:
 
       - name: bash -n
         run: |
-          for f in install.sh uninstall.sh src/network-speedtest.sh tests/*.sh; do
+          for f in install.sh uninstall.sh src/network-speedtest.sh tests/*.sh tests/fixtures/fake-*; do
             bash -n "$f"
           done
 
       - name: shellcheck
-        run: shellcheck -x install.sh uninstall.sh src/network-speedtest.sh tests/*.sh
+        run: shellcheck -x install.sh uninstall.sh src/network-speedtest.sh tests/*.sh tests/fixtures/fake-*
+
+      - name: systemd units
+        run: |
+          sed -e 's/@AGENT_USER@/runner/' -e 's/@AGENT_GROUP@/runner/' \
+            systemd/network-monitor.service > "$RUNNER_TEMP/network-monitor.service"
+          cp systemd/network-monitor.timer "$RUNNER_TEMP/"
+          # the agent is not installed on the runner; point ExecStart at an existing binary
+          sed -i 's|^ExecStart=.*|ExecStart=/bin/true|' "$RUNNER_TEMP/network-monitor.service"
+          systemd-analyze verify "$RUNNER_TEMP/network-monitor.service" "$RUNNER_TEMP/network-monitor.timer"
 
       - name: Agent tests (offline, mocks)
         run: ./tests/test-agent.sh
+
+      - name: Scheduler tests (offline, fixed clock)
+        run: ./tests/test-scheduler.sh
 
       - name: Docker image tests (local arch, mock API)
         run: ./tests/test-docker.sh

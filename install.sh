@@ -18,6 +18,10 @@ readonly DEFAULT_API_URL="https://notes.pidiman.sk/api/network"
 readonly CONFIG_DIR="/etc/notes-network-monitor"
 readonly CONFIG_FILE="$CONFIG_DIR/agent.env"
 readonly AGENT_TARGET="/usr/local/bin/network-speedtest"
+readonly STATE_DIR="/var/lib/notes-network-monitor"
+readonly SYSTEMD_UNIT_DIR="/etc/systemd/system"
+readonly SERVICE_NAME="network-monitor.service"
+readonly TIMER_NAME="network-monitor.timer"
 
 readonly OOKLA_REPO_BASE="https://packagecloud.io/ookla/speedtest-cli/debian"
 readonly OOKLA_GPG_URL="https://packagecloud.io/ookla/speedtest-cli/gpgkey"
@@ -30,6 +34,7 @@ readonly OOKLA_FALLBACK_SUITES="bookworm bullseye buster"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly AGENT_SOURCE="$SCRIPT_DIR/src/network-speedtest.sh"
+readonly SYSTEMD_SOURCE_DIR="$SCRIPT_DIR/systemd"
 
 AGENT_USER=""
 AGENT_GROUP=""
@@ -79,7 +84,8 @@ Usage: sudo ./install.sh
 
 Interactive installer for the Network Monitor Agent.
 Installs dependencies (curl, jq, official Ookla Speedtest CLI), the agent
-($AGENT_TARGET) and its configuration ($CONFIG_FILE).
+($AGENT_TARGET), its configuration ($CONFIG_FILE)
+and the systemd timer for scheduled speedtests ($TIMER_NAME).
 
 The API key is requested interactively with hidden input. It cannot be
 passed as an argument.
@@ -550,6 +556,88 @@ test_api() {
     return 1
 }
 
+# ----------------------------------------------------------------------------
+# scheduling (systemd timer)
+# ----------------------------------------------------------------------------
+
+install_state_dir() {
+    # last measured slot + lock file; never contains the API key
+    install -d -m 0700 -o "$AGENT_USER" -g "$AGENT_GROUP" "$STATE_DIR"
+    chown "$AGENT_USER:$AGENT_GROUP" "$STATE_DIR"
+    chmod 0700 "$STATE_DIR"
+}
+
+systemd_available() {
+    [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1
+}
+
+# render_unit SOURCE TARGET -> returns 0 if TARGET changed
+render_unit() {
+    local src="$1" dst="$2" tmp
+    tmp="$(mktemp)"
+    sed -e "s|@AGENT_USER@|$AGENT_USER|g" -e "s|@AGENT_GROUP@|$AGENT_GROUP|g" "$src" >"$tmp"
+    if [[ -f "$dst" ]] && cmp -s "$tmp" "$dst"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    install -m 0644 -o root -g root "$tmp" "$dst"
+    rm -f "$tmp"
+    return 0
+}
+
+install_scheduler() {
+    section "Scheduling (systemd timer)..."
+    install_state_dir
+    ok "State directory: $STATE_DIR (owner $AGENT_USER, mode 700)"
+
+    if ! systemd_available; then
+        warn "systemd is not running on this system; automatic scheduling is not installed."
+        warn "Run 'network-speedtest --scheduled' every 5 minutes with another scheduler instead."
+        return 0
+    fi
+    local src
+    for src in "$SYSTEMD_SOURCE_DIR/$SERVICE_NAME" "$SYSTEMD_SOURCE_DIR/$TIMER_NAME"; do
+        [[ -f "$src" ]] || die "Missing unit file: $src"
+    done
+
+    local changed=0
+    render_unit "$SYSTEMD_SOURCE_DIR/$SERVICE_NAME" "$SYSTEMD_UNIT_DIR/$SERVICE_NAME" && changed=1
+    render_unit "$SYSTEMD_SOURCE_DIR/$TIMER_NAME" "$SYSTEMD_UNIT_DIR/$TIMER_NAME" && changed=1
+    if [[ $changed -eq 1 ]]; then
+        systemctl daemon-reload
+        ok "Installed/updated $SERVICE_NAME and $TIMER_NAME (runs as $AGENT_USER)"
+    else
+        ok "systemd units already up to date"
+    fi
+
+    if systemctl is-enabled --quiet "$TIMER_NAME" 2>/dev/null; then
+        # already enabled: keep it, pick up changes
+        [[ $changed -eq 1 ]] && systemctl restart "$TIMER_NAME"
+        ok "Timer enabled (kept)"
+    elif confirm "Enable automatic speedtests (schedule managed on notes.pidiman.sk)?" Y; then
+        systemctl enable --now "$TIMER_NAME" >/dev/null 2>&1 \
+            || die "Could not enable $TIMER_NAME (see: systemctl status $TIMER_NAME)"
+        ok "Timer enabled"
+    else
+        say "Timer installed but not enabled. Enable later with:"
+        say "  sudo systemctl enable --now $TIMER_NAME"
+    fi
+}
+
+show_scheduler_status() {
+    systemd_available || return 0
+    [[ -f "$SYSTEMD_UNIT_DIR/$TIMER_NAME" ]] || return 0
+    section "Scheduler status"
+    say "Timer: $(systemctl is-enabled "$TIMER_NAME" 2>/dev/null || true), $(systemctl is-active "$TIMER_NAME" 2>/dev/null || true)"
+    systemctl list-timers "$TIMER_NAME" --all --no-pager 2>/dev/null | sed -n '1,2p' || true
+    say ""
+    say "The timer wakes the agent every 5 minutes; a speedtest runs only in the"
+    say "device's slot (see 'Next slot' above). Useful commands:"
+    say "  systemctl status $TIMER_NAME"
+    say "  systemctl list-timers | grep network-monitor"
+    say "  journalctl -u $SERVICE_NAME"
+}
+
 offer_first_run() {
     say ""
     if confirm "Run first speedtest now?" N; then
@@ -592,10 +680,15 @@ main() {
         warn "Fix the issue and verify with: network-speedtest --check"
     fi
 
+    install_scheduler
+
     section "Installation complete."
     say "Agent:  $AGENT_TARGET"
     say "Config: $CONFIG_FILE"
+    say "State:  $STATE_DIR"
     say "Run manually as '$AGENT_USER':  network-speedtest"
+
+    show_scheduler_status
 
     if [[ $api_ok -eq 0 ]]; then
         offer_first_run

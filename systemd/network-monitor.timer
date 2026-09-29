@@ -1,0 +1,21 @@
+# Network Monitor — wake-up timer (installed by install.sh)
+#
+# Wakes the agent every 5 minutes (at :00, :05, :10, ... local time). The
+# agent runs a speedtest only in the device's slot (interval/offset from
+# notes.pidiman.sk) and at most once per slot. No process stays running
+# between wake-ups.
+
+[Unit]
+Description=Network Monitor schedule check every 5 minutes
+Documentation=https://github.com/pidiman/network-monitor
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=1s
+# After downtime/reboot, run a missed wake-up once at boot; the agent still
+# only measures if the slot started less than 10 minutes ago.
+Persistent=true
+Unit=network-monitor.service
+
+[Install]
+WantedBy=timers.target

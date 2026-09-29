@@ -24,45 +24,7 @@ FAIL=0
 
 # ---------------------------------------------------------------- fakes ----
 
-cat >"$MOCKBIN/curl" <<'MOCK'
-#!/usr/bin/env bash
-# Fake curl: records argv/stdin, answers according to MOCK_* env vars.
-out="" data="" url="" method="GET"
-printf '%s\n' "$*" >>"$MOCK_DIR/curl.argv"
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --config) [[ "$2" == "-" ]] && cat >>"$MOCK_DIR/curl.stdin"; shift ;;
-        --output) out="$2"; shift ;;
-        --data-binary) data="${2#@}"; shift ;;
-        --request) method="$2"; shift ;;
-        --write-out|--connect-timeout|--max-time|--header) shift ;;
-        http*) url="$1" ;;
-    esac
-    shift
-done
-if [[ -n "${MOCK_CURL_FAIL:-}" ]]; then
-    echo "curl: (7) Failed to connect to host port 443: Connection refused" >&2
-    printf '000'
-    exit 7
-fi
-default_config_body='{"device_key":"rpi-test","enabled":true,"interval_minutes":60,"offset_minutes":5}'
-default_post_body='{"id":2}'
-case "$method $url" in
-    "GET "*/config)
-        printf '%s' "${MOCK_CONFIG_BODY:-$default_config_body}" >"$out"
-        printf '%s' "${MOCK_CONFIG_STATUS:-200}"
-        ;;
-    "POST "*/speedtests)
-        cp "$data" "$MOCK_DIR/payload.json"
-        printf '%s' "${MOCK_POST_BODY:-$default_post_body}" >"$out"
-        printf '%s' "${MOCK_POST_STATUS:-201}"
-        ;;
-    *)
-        printf '{"error":"not found"}' >"$out"; printf '404'
-        ;;
-esac
-MOCK
-
+cp "$ROOT/tests/fixtures/fake-curl" "$MOCKBIN/curl"
 cp "$ROOT/tests/fixtures/fake-speedtest" "$MOCKBIN/speedtest"
 chmod +x "$MOCKBIN/curl" "$MOCKBIN/speedtest"
 
@@ -88,6 +50,7 @@ run_agent() {
     rm -rf "$WORK/mock"; mkdir -p "$WORK/mock"
     OUTPUT="$(env -i HOME="$WORK" PATH="$MOCKBIN:/usr/bin:/bin" TMPDIR="$WORK" \
         MOCK_DIR="$WORK/mock" NETWORK_MONITOR_CONFIG="$WORK/agent.env" \
+        NETWORK_MONITOR_STATE_DIR="$WORK/state" \
         ${envs[@]+"${envs[@]}"} bash "$AGENT" "$@" 2>&1)"
     STATUS=$?
 }
